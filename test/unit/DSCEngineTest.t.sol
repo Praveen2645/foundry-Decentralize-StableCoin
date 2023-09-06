@@ -9,6 +9,7 @@ import {DSCEngine} from "../../src/DSCEngine.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {ERC20Mock} from "../../lib/openzeppelin-contracts/contracts/mocks/ERC20Mock.sol";
 import {MockFailedTransferFrom} from "../mocks/MockFiledTransferFrom.sol";
+import {MockV3Aggregator} from "../../test/mocks/MockV3Aggregator.sol";
 
 contract DSCEngineTEst is Test{
     DeployDSC deployer;
@@ -21,6 +22,7 @@ contract DSCEngineTEst is Test{
 
     address public USER = makeAddr("user");
     uint256 public constant AMOUNT_COLLATERAL = 10 ether;
+    uint256 amountToMint = 100 ether;
     uint256 public constant STARTING_ERC20_BALANCE = 10 ether;
 
     function setUp() public {
@@ -134,4 +136,35 @@ contract DSCEngineTEst is Test{
       vm.stopPrank();
 
     }
+
+      /////////////////////////////////////////
+        // deposiCollateralAndMintDsc test //
+    ///////////////////////////////////////////
+
+    function testRevertsIfMintedDscBreaksHealthFactor_() public {
+      (,int256 price,,,) = MockV3Aggregator(ethUsdPriceFeed).latestRoundData();//fetching eth/usd price
+      amountToMint = (AMOUNT_COLLATERAL * (uint256(price)* dsce.getAditionalFeedPrice())) / dsce.getPrecision();
+      vm.startPrank(USER);
+      ERC20Mock(weth).approve(address(dsce),AMOUNT_COLLATERAL);
+
+      uint256 expectedHealthFactor = 
+      dsce.calculateHealthFactor(amountToMint, dsce.getUsdValue(weth,AMOUNT_COLLATERAL));
+      vm.expectRevert(abi.encodeWithSelector(DSCEngine.DSCEngine__BreaksHealthFactor.selector, expectedHealthFactor));
+      dsce.depositCollateralAndMintDsc(weth,AMOUNT_COLLATERAL,amountToMint);
+      vm.stopPrank();
+    }
+
+    modifier depositedCollateralAndMintDsc() {
+      vm.startPrank(USER);
+      ERC20Mock(weth).approve(address(dsce),AMOUNT_COLLATERAL );
+      dsce.depositCollateralAndMintDsc(weth,AMOUNT_COLLATERAL,amountToMint);
+      vm.stopPrank();
+      _;
+    }
+
+  function testCanMintWithDepositedCollateral() public depositedCollateralAndMintDsc{
+    uint256 userBalance = dsc.balanceOf(USER);
+    assertEq(userBalance, amountToMint);
+  }
+
 }
