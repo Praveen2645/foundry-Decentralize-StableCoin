@@ -11,6 +11,7 @@ import {ERC20Mock} from "../../lib/openzeppelin-contracts/contracts/mocks/ERC20M
 import {MockFailedTransferFrom} from "../mocks/MockFiledTransferFrom.sol";
 import {MockV3Aggregator} from "../../test/mocks/MockV3Aggregator.sol";
 import {MockFailedMintDSC} from "../mocks/MockFailedMintDSC.sol";
+import {MockFailedTransfer} from "../mocks/MockFailedTransfer";
 
 contract DSCEngineTEst is Test{
     DeployDSC deployer;
@@ -139,7 +140,7 @@ contract DSCEngineTEst is Test{
     }
 
       /////////////////////////////////////////
-        // deposiCollateralAndMintDsc test //
+        // deposiCollateralAndMintDsc Test //
     ///////////////////////////////////////////
 
     function testRevertsIfMintedDscBreaksHealthFactor_() public {
@@ -190,6 +191,98 @@ contract DSCEngineTEst is Test{
       vm.expectRevert(DSCEngine.DSCEngine__MintFailed.selector);
       mockDsce.depositCollateralAndMintDsc(weth,AMOUNT_COLLATERAL,amountToMint);
       vm.stopPrank();
+    }
 
+    function testRevertsIfMintAountIsZero() public{
+      vm.startPrank(USER);
+      ERC20Mock(weth).approve(address(dsce),AMOUNT_COLLATERAL);
+      dsce.depositCollateralAndMintDsc(weth, AMOUNT_COLLATERAL,amountToMint);
+      vm.expectRevert(DSCEngine.DSCEngine__NeedsMoreThanZero.selector);
+      dsce.depositCollateral(weth,0);
+      vm.stopPrank();
+    }
+
+    function testRevertsIfMintAmountBreaksHealthFactor() public {
+      (, int256 price,,,) = MockV3Aggregator(ethUsdPriceFeed).latestRoundData();
+      amountToMint = (AMOUNT_COLLATERAL *(uint256(price) * dsce.getAditionalFeedPrice()))/ dsce.getPrecision();
+      
+      vm.startPrank(USER);
+      ERC20Mock(weth).approve(address(dsce), AMOUNT_COLLATERAL);
+      dsce.depositCollateral(weth, AMOUNT_COLLATERAL);
+
+      uint256 expectedHealthFactor = 
+        dsce.calculateHealthFactor(amountToMint, dsce.getUsdValue(weth, AMOUNT_COLLATERAL));
+        vm.expectRevert(abi.encodeWithSelector(DSCEngine.DSCEngine__BreaksHealthFactor.selector, expectedHealthFactor));
+        dsce.mintDsc(amountToMint);
+        vm.stopPrank();
+    }
+
+    function testCanMintDsc() public depositedCollateral{
+      vm.prank(USER);
+      dsce.mintDsc(amountToMint);
+
+      uint256 userBalance = dsc.balanceOf(USER);
+      assertEq(userBalance,amountToMint);
+    }
+
+
+    //////////////////////////////////
+          // BurnDSc Test//
+    ///////////////////////////////////
+
+    function testRevertsIfBurnAmountIsZero() public {
+      vm.startPrank(USER);
+      ERC20Mock(weth).approve(address(dsce), AMOUNT_COLLATERAL);
+      dsce.depositCollateralAndMintDsc(weth, AMOUNT_COLLATERAL, amountToMint);
+      vm.expectRevert(DSCEngine.DSCEngine__NeedsMoreThanZero.selector);
+      dsce.burnDsc(0);
+      vm.stopPrank();
+    }
+
+    function testCanBurnMoreThanUserHas() public{
+      vm.prank(USER);
+      vm.expectRevert();
+      dsce.burnDsc(1);
+    }
+
+    function testCanBurnDsc() public depositedCollateralAndMintDsc{
+      vm.startPrank(USER);
+      dsc.approve(address(dsce),amountToMint);
+      dsce.burnDsc(amountToMint);
+      vm.stopPrank();
+
+      uint256 userBalance = dsc.balanceOf(USER);
+      assertEq(userBalance,0);
+    }
+
+    ///////////////////////////////////
+      // redeemCollateral Tests //
+    //////////////////////////////////
+
+    function testRevertsIfTransferFails() public {
+      //arrange -setup
+      address owner = msg.sender;
+      vm.prank(owner);
+      MockFailedTransfer mockDsc = new MockFailedTransfer();
+      tokenAddress = [address(mockDsc)];
+      feedAddresses = [ethUsdPriceFeed];
+      vm.prank(owner);
+      DSCEngine mockDsce = new DSCEngine(
+        tokenAddresses,
+        feedAddresses,
+        address(mockDsc)
+      );
+      mockDsc.mint(user, AMOUNT_COLLATERAL);
+
+      vm.prank(owner);
+      mockDsc.transferOwnership(address(mockDsce));
+
+      vm.startPrank(USER);
+      ERC20Mock(address(mockDsc)).approve(address(mockDsc),AMOUNT_COLLATERAL);
+
+      mockDsce.depositCollateral(address(mockDsc, AMOUNT_COLLATERAL));
+      vm.expectRevert(DSCEngine.DSCEngine__TransferFailed.selector);
+      mockDsc.redeemCollateral(address(mockDsc), AMOUNT_COLLATERAL);
+      vm.stopPrank();
     }
 }
